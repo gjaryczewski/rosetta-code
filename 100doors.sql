@@ -1,188 +1,95 @@
--- Transact-SQL
+SET NOCOUNT ON;
 
-WITH    OneToTen (N)
-AS  (   SELECT  N
-        FROM (  VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
-                ) V(N)
-        )
-    ,   InitDoors (Num, IsOpen)
-AS  (   SELECT  1
-            +   1 * Units.N
-            +   10 * Tens.N AS Num
-            ,   CONVERT(Bit, 0) AS IsOpen
-        FROM    OneToTen AS Units
-        CROSS JOIN  OneToTen AS Tens
-        ) -- This part could be easier with a tally table or equivalent table-valued function
-    ,   States (NbStep, Num, IsOpen)
-AS  (   SELECT  0 AS NbStep
-            ,   Num
-            ,   IsOpen
-        FROM    InitDoors AS InitState
-        UNION ALL
-        SELECT  1 + NbStep
-            ,   Num
-            ,   CASE Num % (1 + NbStep)
-                    WHEN 0 THEN ~IsOpen
-                    ELSE IsOpen
-                END
-        FROM    States
-        WHERE   NbStep < 100
-        )
-SELECT  Num AS DoorNumber
-    ,   Concat( 'Door number ', Num, ' is '
-            ,   CASE IsOpen
-                    WHEN 1 THEN ' open'
-                    ELSE ' closed'
-                END ) AS RESULT -- Concat needs SQL Server 2012
-FROM    States
-WHERE   NbStep = 100
-ORDER BY Num
-; -- Fortunately, maximum recursion is 100 in SQL Server.
--- For more doors, the MAXRECURSION hint should be used.
--- More doors would also need an InitDoors with more rows.
+-- Doors can be open or closed.
+DECLARE @open CHAR(1) = 'O';
+DECLARE @closed CHAR(1) = 'C';
 
--- SQL
+-- There are 100 doors in a row that are all initially closed.
+DECLARE @doorsCount INT = 100;
+DECLARE @doors TABLE (doorKey INT PRIMARY KEY, doorState CHAR(1));
+WITH sample100 AS (
+    SELECT TOP(100) object_id
+    FROM sys.objects
+)
+INSERT @doors
+  SELECT ROW_NUMBER() OVER (ORDER BY A.object_id) AS doorKey,
+    @closed AS doorState
+  FROM sample100 AS A
+      CROSS JOIN sample100 AS B
+      CROSS JOIN sample100 AS C
+      CROSS JOIN sample100 AS D
+  ORDER BY 1
+  OFFSET 0 ROWS
+  FETCH NEXT @doorsCount ROWS ONLY;
 
-DECLARE	@sqr INT,
-		@i INT,
-		@door INT;
- 
-SELECT @sqr =1,
-	@i = 3,
-	@door = 1;	
- 
-WHILE(@door <=100)
-BEGIN
-	IF(@door = @sqr)
-	BEGIN
-		PRINT 'Door ' + RTRIM(CAST(@door AS CHAR)) + ' is open.';
-		SET @sqr= @sqr+@i;
-		SET @i=@i+2;
-	END
-	ELSE
-	BEGIN
-		PRINT 'Door ' + RTRIM(CONVERT(CHAR,@door)) + ' is closed.';
-	END
-SET @door = @door + 1
-END
+-- You make 100 passes by the doors, visiting every door and toggle the door (if
+-- the door is closed, open it; if it is open, close it), according to the rules
+-- of the task.
+DECLARE @pass INT = 1;
+WHILE @pass <= @doorsCount BEGIN
+  UPDATE @doors
+  SET doorState = CASE doorState WHEN @open THEN @closed ELSE @open END
+  WHERE doorKey >= @pass
+    AND doorKey % @pass = 0;
 
--- PL/SQL
-
-DECLARE
-  TYPE doorsarray IS VARRAY(100) OF BOOLEAN;
-  doors doorsarray := doorsarray();
-BEGIN
- 
-doors.EXTEND(100);  --ACCOMMODATE 100 DOORS
- 
-FOR i IN 1 .. doors.COUNT  --MAKE ALL 100 DOORS FALSE TO INITIALISE
-  LOOP
-     doors(i) := FALSE;                    
-  END LOOP;
- 
-FOR j IN 1 .. 100 --ITERATE THRU USING MOD LOGIC AND FLIP THE DOOR RIGHT OPEN OR CLOSE
- LOOP
-      FOR k IN 1 .. 100
-        LOOP
-                  IF MOD(k,j)=0 THEN 
-                     doors(k) := NOT doors(k); 
-                  END IF;
-        END LOOP;
- END LOOP;
- 
-FOR l IN 1 .. doors.COUNT  --PRINT THE STATUS IF ALL 100 DOORS AFTER ALL ITERATION
-  LOOP
-       DBMS_OUTPUT.PUT_LINE('DOOR '||l||' IS -->> '||CASE WHEN SYS.DBMS_SQLTCB_INTERNAL.I_CONVERT_FROM_BOOLEAN(doors(l)) = 'TRUE' 
-                                                                THEN 'OPEN' 
-                                                              ELSE 'CLOSED' 
-                                                        END);
-  END LOOP;
- 
+  SET @pass = @pass + 1;
 END;
 
--- MySQL
+-- Answer the question: what state are the doors in after the last pass?
+-- The answer as the query result is:
+SELECT doorKey, doorState FROM @doors;
+-- The answer as the console output is:
+DECLARE @log VARCHAR(max);
+DECLARE @doorKey INT = (SELECT MIN(doorKey) FROM @doors);
+WHILE @doorKey <= @doorsCount BEGIN
+  SET @log = (
+      SELECT TOP(1) CONCAT('Doors ', doorKey, ' are ',
+        CASE doorState WHEN @open THEN ' open' ELSE 'closed' END, '.')
+      FROM @doors
+      WHERE doorKey = @doorKey
+    );
+  RAISERROR (@log, 0, 1) WITH NOWAIT;
 
-DROP PROCEDURE IF EXISTS one_hundred_doors;
- 
-DELIMITER |
- 
-CREATE PROCEDURE one_hundred_doors (n INT)
-BEGIN
-  DROP TEMPORARY TABLE IF EXISTS doors; 
-  CREATE TEMPORARY TABLE doors (
-    id INTEGER NOT NULL,
-    open BOOLEAN DEFAULT FALSE,
-    PRIMARY KEY (id)
-  );
- 
-  SET @i = 1;
-  create_doors: LOOP
-    INSERT INTO doors (id, open) values (@i, FALSE);
-    SET @i = @i + 1;
-    IF @i > n THEN
-      LEAVE create_doors;
-    END IF;
-  END LOOP create_doors;
- 
-  SET @i = 1;
-  toggle_doors: LOOP
-    UPDATE doors SET open = NOT open WHERE MOD(id, @i) = 0;
-    SET @i = @i + 1;
-    IF @i > n THEN
-      LEAVE toggle_doors;
-    END IF;
-  END LOOP toggle_doors;
- 
-  SELECT id FROM doors WHERE open;
-END|
- 
-DELIMITER ;
- 
-CALL one_hundred_doors(100);
+  SET @doorKey = (SELECT MIN(doorKey) FROM @doors WHERE doorKey > @doorKey);
+END;
 
--- SQL PL
+-- Which are open, which are closed?
+-- The answer as the query result is:
+SELECT doorKey, doorState FROM @doors WHERE doorState = @open;
+SELECT doorKey, doorState FROM @doors WHERE doorState = @closed;
+-- The answer as the console output is:
+SET @log = (
+  SELECT CONCAT('These are open doors: ',
+    STRING_AGG(CAST(doorKey AS VARCHAR(max)), ', '), '.')
+  FROM @doors
+  WHERE doorState = @open
+);
+RAISERROR (@log, 0, 1) WITH NOWAIT;
+SET @log = (
+  SELECT CONCAT('These are closed doors: ',
+    STRING_AGG(CAST(doorKey AS VARCHAR(max)), ', '), '.')
+  FROM @doors
+  WHERE doorState = @closed
+);
+RAISERROR (@log, 0, 1) WITH NOWAIT;
 
---#SET TERMINATOR @
- 
-SET SERVEROUTPUT ON @
- 
-BEGIN
- DECLARE TYPE DOORS_ARRAY AS BOOLEAN ARRAY [100];
- DECLARE DOORS DOORS_ARRAY;
- DECLARE I SMALLINT;
- DECLARE J SMALLINT;
- DECLARE STATUS CHAR(10);
- DECLARE SIZE SMALLINT DEFAULT 100;
- 
- -- Initializes the array, with all spaces (doors) as false (closed).
- SET I = 1;
- WHILE (I <= SIZE) DO
-  SET DOORS[I] = FALSE;
-  SET I = I + 1;
- END WHILE;
- 
- -- Processes the doors.
- SET I = 1;
- WHILE (I <= SIZE) DO
-  SET J = 1;
-  WHILE (J <= SIZE) DO
-   IF (MOD(J, I) = 0) THEN
-    IF (DOORS[J] = TRUE) THEN
-     SET DOORS[J] = FALSE;
-    ELSE
-     SET DOORS[J] = TRUE;
-    END IF;
-   END IF;
-   SET J = J + 1;
-  END WHILE;
-  SET I = I + 1;
- END WHILE;
- 
- -- Prints the final status o the doors.
- SET I = 1;
- WHILE (I <= SIZE) DO
-  SET STATUS = (CASE WHEN (DOORS[I] = TRUE) THEN 'OPEN' ELSE 'CLOSED' END);
-  CALL DBMS_OUTPUT.PUT_LINE('Door ' || I || ' is '|| STATUS);
-  SET I = I + 1;
- END WHILE;
-END @
+-- Assert:
+DECLARE @expected TABLE (doorKey INT PRIMARY KEY);
+SET @doorKey = 1;
+WHILE @doorKey * @doorKey <= @doorsCount BEGIN
+  INSERT @expected VALUES (@doorKey * @doorKey);
+  SET @doorKey = @doorKey + 1;
+END;
+IF NOT EXISTS (
+    SELECT doorKey FROM @doors WHERE doorState = @open
+    EXCEPT
+    SELECT doorKey FROM @expected
+  )
+  AND NOT EXISTS (
+    SELECT doorKey FROM @expected
+    EXCEPT
+    SELECT doorKey FROM @doors WHERE doorState = @open
+  )
+  PRINT 'The task is solved.';
+ELSE
+  THROW 50000, 'These aren''t the doors you''re looking for.', 1;
