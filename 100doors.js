@@ -1,150 +1,40 @@
--- ES5 Iterative
+"use strict";
 
-var doors = [];
+// Doors can be open or closed.
+const open = "O";
+const closed = "C";
 
-for (var i = 0; i < 100; i++)
-    doors[i] = false;
+// There are 100 doors in a row that are all initially closed.
+const doorsCount = 100;
+const doors = [];
+for (var i = 0; i < doorsCount; doors[i] = closed, i++);
 
-for (var i = 1; i<= 100; i++)
-    for (var i2 = i - 1, g; i2<100; i2+=i)
-        doors[i2] =! doors[i2];
+// You make 100 passes by the doors, visiting every door and toggle the door (if
+// the door is closed, open it; if it is open, close it), according to the rules
+// of the task.
+for (var pass = 1; pass <= doorsCount; pass++)
+    for (var i = pass - 1; i < doorsCount; i += pass)
+        doors[i] = doors[i] == open ? closed : open;
 
-for (var i = 1; i <= 100; i++)
-    console.log("Door %d is %s", i, doors[i-1] ? "open" : "closed");
+// Answer the question: what state are the doors in after the last pass?
+doors.forEach((v, i) =>
+    console.log(`Doors ${i + 1} are ${v == open ? 'opened' : 'closed'}.`));
 
--- ES5 Functional Composition, Naive search
+// Which are open, which are closed?
+let openKeyList = [];
+let closedKeyList = [];
+for (var door of doors.entries())
+    if (door[1] == open)
+        openKeyList.push(door[0] + 1);
+    else
+        closedKeyList.push(door[0] + 1);
+console.log("These are open doors: " + openKeyList.join(", ") + ".");
+console.log("These are closed doors: " + closedKeyList.join(", ") + ".");
 
-(function (n) {
-    "use strict";
-    function finalDoors(n) {
-        var lstRange = range(1, n);
-        return lstRange
-            .reduce(function (a, _, k) {
-                var m = k + 1;
-                return a.map(function (x, i) {
-                    var j = i + 1;
-                    return [j, j % m ? x[1] : !x[1]];
-                });
-            }, zip(
-                lstRange,
-                replicate(n, false)
-            ));
-    };
-    function zip(xs, ys) {
-        return xs.length === ys.length ? (
-            xs.map(function (x, i) {
-                return [x, ys[i]];
-            })
-        ) : undefined;
-    }
-    function replicate(n, a) {
-        var v = [a],
-            o = [];
-        if (n < 1) return o;
-        while (n > 1) {
-            if (n & 1) o = o.concat(v);
-            n >>= 1;
-            v = v.concat(v);
-        }
-        return o.concat(v);
-    }
-    function range(m, n, delta) {
-        var d = delta || 1,
-            blnUp = n > m,
-            lng = Math.floor((blnUp ? n - m : m - n) / d) + 1,
-            a = Array(lng),
-            i = lng;
-        if (blnUp)
-            while (i--) a[i] = (d * i) + m;
-        else
-            while (i--) a[i] = m - (d * i);
-        return a;
-    }
-    return finalDoors(n)
-        .filter(function (tuple) {
-            return tuple[1];
-        })
-        .map(function (tuple) {
-            return {
-                door: tuple[0],
-                open: tuple[1]
-            };
-        });
- 
-})(100);
-
--- Optimized (iterative)
-
-for (var door = 1; door <= 100; door++) {
-    var sqrt = Math.sqrt(door);
-    if (sqrt === (sqrt | 0)) {
-      console.log("Door %d is open", door);
-    }
-  }
-
--- Simple for loop
-
-for(var door=1;i<10/*Math.sqrt(100)*/;i++){
-    console.log("Door %d is open",i*i);
-   }
-
--- Optimized (functional)
--- The question of which doors are flipped an odd number of times reduces to the question of which numbers have an odd number of integer factors. We can simply search for these:
-
-(function (n) {
-    "use strict";
-    return range(1, 100)
-        .filter(function (x) {
-            return integerFactors(x)
-                .length % 2;
-        });
-    function integerFactors(n) {
-        var rRoot = Math.sqrt(n),
-            intRoot = Math.floor(rRoot),
-            lows = range(1, intRoot)
-            .filter(function (x) {
-                return (n % x) === 0;
-            });
-        return lows.concat(lows.map(function (x) {
-                return n / x;
-            })
-            .reverse()
-            .slice((rRoot === intRoot) | 0));
-    }
-    function range(m, n, delta) {
-        var d = delta || 1,
-            blnUp = n > m,
-            lng = Math.floor((blnUp ? n - m : m - n) / d) + 1,
-            a = Array(lng),
-            i = lng;
-        if (blnUp)
-            while (i--) a[i] = (d * i) + m;
-        else
-            while (i--) a[i] = m - (d * i);
-        return a;
-    }
-})(100);
-
--- ES6 (1)
-
-Array.apply(null, { length: 100 })
-  .map((v, i) => i + 1)
-    .forEach(door => { 
-      var sqrt = Math.sqrt(door); 
- 
-      if (sqrt === (sqrt | 0)) {
-        console.log("Door %d is open", door);
-      } 
-    });
-
--- ES6 (2)
-
-// Array comprehension style
-[ for (i of Array.apply(null, { length: 100 })) i ].forEach((_, i) => { 
-  var door = i + 1
-  var sqrt = Math.sqrt(door); 
- 
-  if (sqrt === (sqrt | 0)) {
-    console.log("Door %d is open", door);
-  } 
-});
+// Assert:
+const expected = [];
+for (var i = 1; i * i <= doorsCount; expected.push(i * i), i++);
+if (openKeyList.every((v, i) => v === expected[i]))
+    console.log("The task is solved.")
+else
+    throw "These aren't the doors you're looking for.";
