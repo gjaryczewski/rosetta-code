@@ -20,60 +20,13 @@ INSERT numbers
         CROSS JOIN sample100 AS B;
 GO
 
-CREATE TABLE dbo.randoms (n INT PRIMARY KEY, random INT);
-GO
-
 CREATE TABLE dbo.drawers (drawer INT PRIMARY KEY, card INT);
 GO
 
 CREATE TABLE dbo.results (strategy VARCHAR(10), game INT, result BIT, PRIMARY KEY (game, strategy));
 GO
 
-CREATE FUNCTION dbo.randomStrategy(@prisoner INT, @card INT)
-RETURNS INT
-AS BEGIN
-    -- Simulate the game where the prisoners randomly open drawers.
-
-    DECLARE @random INT = (SELECT random FROM randoms WHERE n = @prisoner);
-
-    RETURN (SELECT TOP(1) card FROM drawers WHERE drawer = @random);
-END
-GO
-
-CREATE FUNCTION dbo.optimalStrategy(@prisoner INT, @card INT)
-RETURNS INT
-AS BEGIN
-    -- Simulate the game where the prisoners use the optimal strategy mentioned in the Wikipedia article.
-
-    -- First opening the drawer whose outside number is his prisoner number.
-    -- If the card within has his number then he succeeds...
-    if (@card IS NULL)
-        RETURN (SELECT TOP(1) card FROM drawers WHERE drawer = @prisoner);
-   
-    -- ...otherwise he opens the drawer with the same number as that of the revealed card.
-    RETURN (SELECT TOP(1) card FROM drawers WHERE drawer = @card);
-END
-GO
-
-CREATE PROCEDURE dbo.shuffle
-AS BEGIN
-    SET NOCOUNT ON;
-
-    DECLARE @i INT = 1;
-    DECLARE @max INT = (SELECT COUNT(*) FROM drawers);
-    WHILE @i <= @max BEGIN
-        DECLARE @j INT = ROUND(RAND() * (@max - @i), 0) + @i;
-        IF @i <> @j
-            UPDATE drawers
-            SET card = CASE drawer WHEN @i THEN @j ELSE @i END
-            WHERE drawer IN (@i, @j);
-
-        SET @i = @i + 1;
-    END
-END
-GO
-
-CREATE PROCEDURE dbo.initDrawers @prisonersCount INT
+ALTER PROCEDURE dbo.shuffleDrawers @prisonersCount INT
 AS BEGIN
     SET NOCOUNT ON;
 
@@ -82,32 +35,104 @@ AS BEGIN
         SELECT n AS drawer, n AS card
         FROM numbers
         WHERE n <= @prisonersCount;
-    ELSE
-        UPDATE drawers
-        SET card = drawer
-        FROM drawers;
 
-    EXECUTE shuffle;
+    DECLARE @randoms TABLE (n INT, random INT);
+    DECLARE @n INT = 1;
+    WHILE @n <= @prisonersCount BEGIN
+        INSERT @randoms VALUES (@n, ROUND(RAND() * (@prisonersCount - 1), 0) + 1);
+
+        SET @n = @n + 1;
+    END;
+
+    WITH ordered AS (
+        SELECT ROW_NUMBER() OVER (ORDER BY random ASC) AS drawer,
+            n AS card
+        FROM @randoms
+    )
+    UPDATE drawers
+    SET card = o.card
+    FROM drawers AS s
+        INNER JOIN ordered AS o
+            ON o.drawer = s.drawer;
 END
 GO
 
-CREATE PROCEDURE dbo.initRandoms @prisonersCount INT
+DELETE drawers;
+EXECUTE shuffleDrawers 10;
+SELECT * FROM drawers;
+
+CREATE PROCEDURE dbo.find @prisoner INT, @strategy VARCHAR(10)
+AS BEGIN
+    -- A prisoner can open no more than 50 drawers.
+    DECLARE @drawersCount INT = (SELECT COUNT(*) FROM drawers);
+    DECLARE @openMax INT = @drawersCount / 2;
+
+    -- Prisoners start outside the room.
+    DECLARE @card INT = 1;
+    DECLARE @open INT = 1;
+    WHILE @open < @openMax BEGIN
+        -- A prisoner tries to find his own number.
+        IF @strategy = 'random' BEGIN
+            DECLARE @random INT = ROUND(RAND() * (@drawersCount - 1), 0) + 1;
+            SET @card = (SELECT TOP(1) card FROM drawers WHERE drawer = @random);
+        END
+        IF @strategy = 'optimal' BEGIN
+            IF @card IS NULL
+                SET @card = (SELECT TOP(1) card FROM drawers WHERE drawer = @prisoner);
+            ELSE
+                SET @card = (SELECT TOP(1) card FROM drawers WHERE drawer = @card);
+        END
+
+        -- A prisoner finding his own number is then held apart from the others.
+        IF @card = @prisoner
+            RETURN 1;
+
+        SET @open = @open + 1;
+    END
+
+    RETURN 0;
+END
+GO
+
+CREATE PROCEDURE dbo.playGame @gamesCount INT, @strategy VARCHAR(10), @prisonersCount INT = 100
 AS BEGIN
     SET NOCOUNT ON;
 
-    IF NOT EXISTS (SELECT * FROM randoms)
-        INSERT randoms (n, random)
-        SELECT n AS drawer, n AS random
+    IF NOT EXISTS (SELECT * FROM results WHERE strategy = @strategy)
+        INSERT results (strategy, game, result)
+        SELECT @strategy AS strategy, n AS game, 0 AS result
         FROM numbers
-        WHERE n <= @prisonersCount;
+        WHERE n <= @gamesCount;
+    ELSE
+        UPDATE results
+        SET result = 0
+        WHERE strategy = @strategy;
 
-    DECLARE @n INT = 1;
-    WHILE @n < @prisonersCount BEGIN
-        UPDATE randoms
-        SET random = ROUND(RAND() * (@prisonersCount - 1), 0) + 1
-        WHERE n = @n;
+    DECLARE @game INT = 1;
+    WHILE @game <= @gamesCount BEGIN
+        -- A room having a cupboard of 100 opaque drawers numbered 1 to 100, that cannot be seen from outside.
+        -- Cards numbered 1 to 100 are placed randomly, one to a drawer, and the drawers all closed; at the start.
+        EXECUTE shuffleDrawers @prisonersCount;
 
-        SET @n = @n + 1;
+        -- A prisoner tries to find his own number.
+        -- Prisoners start outside the room.
+        -- They can decide some strategy before any enter the room.
+        DECLARE @prisoner INT = 1;
+        DECLARE @found INT;
+        DECLARE @foundCount INT = 0;
+        WHILE @prisoner <= @prisonersCount BEGIN
+            EXECUTE @found = find @prisoner, @strategy;
+            IF @found = 1
+                SET @foundCount = @foundCount + 1;
+
+            SET @prisoner = @prisoner + 1;
+        END;
+
+        -- If all 100 findings find their own numbers then they will all be pardoned. If any don't then all sentences stand.
+        IF @foundCount = @prisonersCount
+            UPDATE results SET result = 1 WHERE strategy = @strategy AND game = @game;
+    
+        SET @game = @game + 1;
     END
 END
 GO
@@ -123,77 +148,8 @@ AS BEGIN
 END
 GO
 
-CREATE FUNCTION dbo.find(@prisoner INT, @strategy VARCHAR(10))
-RETURNS BIT
-AS BEGIN
-    -- A prisoner can open no more than 50 drawers.
-    DECLARE @openMax INT = (SELECT COUNT(*) / 2 FROM drawers);
-
-    -- Prisoners start outside the room.
-    DECLARE @card INT = 1;
-    DECLARE @open INT = 1;
-    WHILE @open < @openMax BEGIN
-        -- A prisoner tries to find his own number.
-        IF @strategy = 'random'
-            SET @card = dbo.randomStrategy(@prisoner, @card);
-        ELSE IF @strategy = 'optimal'
-            SET @card = dbo.optimalStrategy(@prisoner, @card);
-        ELSE
-            SET @card = NULL;
-
-        -- A prisoner finding his own number is then held apart from the others.
-        IF @card = @prisoner
-            BREAK;
-
-        SET @open = @open + 1;
-    END
-
-    RETURN (CASE WHEN @card = @prisoner THEN 1 ELSE 0 END);
-END
-GO
-
-CREATE PROCEDURE dbo.playGame @gamesCount INT, @strategy VARCHAR(10), @prisonersCount INT = 100
-AS BEGIN
-    SET NOCOUNT ON;
-
-    IF EXISTS (SELECT * FROM results WHERE strategy = @strategy)
-        DELETE results WHERE strategy = @strategy;
-    
-    INSERT results (strategy, game, result)
-    SELECT @strategy AS strategy, n AS game, 0 AS result
-    FROM numbers
-    WHERE n <= @gamesCount;
-
-    DECLARE @game INT = 1;
-    WHILE @game <= @gamesCount BEGIN
-        -- A room having a cupboard of 100 opaque drawers numbered 1 to 100, that cannot be seen from outside.
-        -- Cards numbered 1 to 100 are placed randomly, one to a drawer, and the drawers all closed; at the start.
-        EXECUTE initDrawers @prisonersCount;
-        EXECUTE initRandoms @prisonersCount;
-
-        -- A prisoner tries to find his own number.
-        -- Prisoners start outside the room.
-        -- They can decide some strategy before any enter the room.
-        DECLARE @matchCount INT;
-        WITH findings AS (
-            SELECT n AS prisoner, dbo.find(n, @strategy) AS result
-            FROM numbers
-            WHERE n <= @prisonersCount
-        )
-        SELECT @matchCount = COUNT(*) FROM findings WHERE result = 1;
-
-        -- If all 100 findings find their own numbers then they will all be pardoned. If any don't then all sentences stand.
-        UPDATE results
-        SET result = CASE WHEN @matchCount = @prisonersCount THEN 1 ELSE 0 END
-        WHERE strategy = @strategy AND game = @game;
-    
-        SET @game = @game + 1;
-    END
-END
-GO
-
 -- Simulate several thousand instances of the game:
-DECLARE @gamesCount INT = 2;
+DECLARE @gamesCount INT = 20;
 
 -- ...where the prisoners randomly open drawers.
 EXECUTE playGame @gamesCount, 'random';
@@ -211,16 +167,14 @@ SET @log = CONCAT('Probability of success with "optimal" strategy: ', dbo.comput
 RAISERROR (@log, 0, 1) WITH NOWAIT;
 GO
 
-DROP PROCEDURE dbo.playGame;
-DROP FUNCTION dbo.find;
-DROP FUNCTION dbo.computeProbability;
-DROP PROCEDURE dbo.initRandoms;
-DROP PROCEDURE dbo.initDrawers;
-DROP PROCEDURE dbo.shuffle;
-DROP FUNCTION dbo.optimalStrategy;
-DROP FUNCTION dbo.randomStrategy;
-DROP TABLE dbo.results;
-DROP TABLE dbo.drawers;
-DROP TABLE dbo.randoms;
-DROP TABLE dbo.numbers;
-GO
+-- DROP FUNCTION dbo.computeProbability;
+-- DROP PROCEDURE dbo.playGame;
+-- DROP PROCEDURE dbo.find;
+-- DROP PROCEDURE dbo.shuffleDrawers;
+-- DROP TABLE dbo.results;
+-- DROP TABLE dbo.drawers;
+-- DROP TABLE dbo.numbers;
+-- GO
+
+SELECT * FROM drawers;
+SELECT * FROM results;
