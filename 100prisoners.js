@@ -25,12 +25,12 @@ function playGame(gamesCount, strategy, prisonersCount = 100) {
         // A prisoner tries to find his own number.
         // Prisoners start outside the room.
         // They can decide some strategy before any enter the room.
-        const findings = new Array();
-        for (let prisoner = 1; prisoner <= prisonersCount; prisoner++)
-            findings.push(find(prisoner, drawers, strategy));
+        let found = 0;
+        for (let prisoner = 1; prisoner <= prisonersCount; prisoner++, found++)
+            if (!find(prisoner, drawers, strategy)) break;
 
         // If all 100 findings find their own numbers then they will all be pardoned. If any don't then all sentences stand.
-        results.push((findings.filter(p => p == true).length == prisonersCount));
+        results.push(found == prisonersCount);
     }
 
     return results;
