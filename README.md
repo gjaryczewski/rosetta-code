@@ -4,10 +4,18 @@
 
 ## My contribution
 
+### C#
+
+WIP
+
 ### JavaScript
 
 * [100 prisoners](https://rosettacode.org/wiki/100_prisoners#School_example)
 * [100 doors](https://rosettacode.org/wiki/100_doors#School_example)
+
+### Powershell
+
+WIP
 
 ### Transact-SQL (T-SQL)
 
